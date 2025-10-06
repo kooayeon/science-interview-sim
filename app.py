@@ -554,33 +554,32 @@ def main():
             st.dataframe(df, use_container_width=True)
         else:
             st.caption("아직 저장된 기록이 없습니다.")
-
-    # 텍스트 답변 입력
-answer = st.text_area("답변 입력", key=f"ans_{q_idx}", height=180, placeholder="구조를 따라 차분히 서술해 보세요…")
+            # 텍스트 답변 입력
+    answer = st.text_area("답변 입력", key=f"ans_{q_idx}", height=180, placeholder="구조를 따라 차분히 서술해 보세요…")
 
 # 🔧 피드백 테스트/진단 (제출 없이 실행) — 반드시 main() 내부, 위 answer 바로 아래
-with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("🔑 키 감지:", "✅" if client else "❌")
-        st.write("🧠 모델:", OPENAI_MODEL)
-    with col2:
-        if st.button("API 연동 체크", use_container_width=True, key=f"chk_{st.session_state.get('idx',0)}"):
-            if not client:
-                st.error("OpenAI API 키가 인식되지 않았습니다.")
-            else:
-                try:
-                    _ = client.models.list()
-                    st.success("API 연결 OK")
-                except Exception as e:
-                    st.error(f"API 오류: {e}")
+    with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("🔑 키 감지:", "✅" if client else "❌")
+            st.write("🧠 모델:", OPENAI_MODEL)
+        with col2:
+            if st.button("API 연동 체크", use_container_width=True, key=f"chk_{st.session_state.get('idx',0)}"):
+                if not client:
+                    st.error("OpenAI API 키가 인식되지 않았습니다.")
+                else:
+                    try:
+                        _ = client.models.list()
+                        st.success("API 연결 OK")
+                    except Exception as e:
+                        st.error(f"API 오류: {e}")
 
-    if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{st.session_state.get('idx',0)}"):
-        fb, err = gpt_feedback(q["question"], (answer or "").strip())
-        if fb:
-            st.markdown(fb)
-        else:
-            st.error(f"생성 실패: {err}")
+        if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{st.session_state.get('idx',0)}"):
+            fb, err = gpt_feedback(q["question"], (answer or "").strip())
+            if fb:
+                st.markdown(fb)
+            else:
+                st.error(f"생성 실패: {err}")
 
 
 
