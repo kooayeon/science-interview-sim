@@ -258,6 +258,7 @@ def gpt_feedback(question: str, answer: str) -> str:
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
 
+    # ← 줄 리스트를 join해서 붙여넣기 오류(따옴표/줄바꿈) 방지
     user_prompt_lines = [
         "[질문]",
         question,
@@ -273,8 +274,7 @@ def gpt_feedback(question: str, answer: str) -> str:
         "- 코칭 한 줄: ...",
         "- 총평: ...",
     ]
-    user_prompt = "
-".join(user_prompt_lines)
+    user_prompt = "\n".join(user_prompt_lines)
 
     try:
         resp = client.chat.completions.create(
@@ -288,6 +288,7 @@ def gpt_feedback(question: str, answer: str) -> str:
         return resp.choices[0].message.content.strip()
     except Exception:
         return ""
+
 
 # =============================
 # 녹음 래퍼 (두 컴포넌트 공통 처리)
