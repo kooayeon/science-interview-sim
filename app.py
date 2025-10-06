@@ -211,31 +211,24 @@ def gpt_feedback(question: str, answer: str) -> str:
     """답변 자동 피드백(논리/개념/태도/명료성). 클라이언트 없으면 빈 문자열."""
     if client is None or not answer.strip():
         return ""
-    sys = (
+
+    sys_prompt = (
         "너는 과학고 면접관이다. 답변을 4가지 항목(논리, 과학개념, 태도, 명료성)으로 "
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
-    user = (
-        f"[질문]
-{question}
 
-"
-        f"[답변]
-{answer}
-
-"
-        "형식: 
-- 논리: ?/5
-- 과학개념: ?/5
-- 태도: ?/5
-- 명료성: ?/5
-- 코칭 한 줄: ...
-- 총평: ..."
+    # ← f-string 대신 .format()으로 한 줄에 작성해 줄바꿈 이슈 방지
+    user_prompt = "[질문]\n{}\n\n[답변]\n{}\n\n형식: \n- 논리: ?/5\n- 과학개념: ?/5\n- 태도: ?/5\n- 명료성: ?/5\n- 코칭 한 줄: ...\n- 총평: ...".format(
+        question, answer
     )
+
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             temperature=0.2,
         )
         return resp.choices[0].message.content.strip()
