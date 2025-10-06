@@ -522,8 +522,8 @@ def main():
             "coach_comment": (coach_comment.strip() or fb_text),
         }
         st.session_state["records"].append(record)
-
-if submit:
+        
+    if submit:
     feedback = ""
     fb_err = ""
     ans_text = (answer or "").strip()
@@ -551,7 +551,8 @@ if submit:
     st.session_state["quick_rec"] = False
     if st.session_state["auto_flow"]:
         st.rerun()
-with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
+
+    with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
     colt1, colt2 = st.columns(2)
     with colt1:
         ok_key = client is not None
