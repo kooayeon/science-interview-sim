@@ -125,24 +125,20 @@ def to_csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def to_markdown_bytes(df: pd.DataFrame) -> bytes:
-    md = ["# 과학고 면접 연습 리포트
-"]
+    md_lines = ["# 과학고 면접 연습 리포트\n"]
     for i, row in df.iterrows():
-        md.append(f"## Q{i+1}. {row['question']}")
-        md.append(f"- 카테고리: {row['category']}")
-        md.append(f"- 소요시간: {row['duration_sec']}초")
-        md.append(
-            f"- 점수(1~5): 논리 {row['score_logic']}, 개념 {row['score_concept']}, 태도 {row['score_attitude']}, 명료성 {row['score_clarity']}")
-        md.append(f"- 총평: {row['coach_comment']}")
-        md.append("
-**답변:**
-")
-        md.append((row["answer"] or "(미작성)"))
-        md.append("
----
-")
-    return "
-".join(md).encode("utf-8")
+        md_lines.append(f"## Q{i+1}. {row['question']}")
+        md_lines.append(f"- 카테고리: {row['category']}")
+        md_lines.append(f"- 소요시간: {row['duration_sec']}초")
+        md_lines.append(
+            f"- 점수(1~5): 논리 {row['score_logic']}, 개념 {row['score_concept']}, 태도 {row['score_attitude']}, 명료성 {row['score_clarity']}"
+        )
+        md_lines.append(f"- 총평: {row['coach_comment']}")
+        md_lines.append("\n**답변:**\n")
+        md_lines.append(row["answer"] or "(미작성)")
+        md_lines.append("\n---\n")
+    return "\n".join(md_lines).encode("utf-8")
+
 
 # -----------------------------
 # 메인 앱
