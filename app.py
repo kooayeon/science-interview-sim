@@ -97,10 +97,12 @@ def countdown(key: str = "remaining"):
 
     # 자동 리프레시
     if remaining > 0:
-    st.session_state[key] = remaining - 1
-    st.progress(max(0, min(100, int((remaining / st.session_state["timer_sec"]) * 100))))
+       st.session_state[key] = remaining - 1
+       st.progress(max(0, min(100, int((remaining / st.session_state["timer_sec"]) * 100))))
     else:
-    st.session_state[key] = 0
+       st.session_state[key] = 0
+
+
 
 # -----------------------------
 # 데이터프레임 -> CSV/MD 바이트
