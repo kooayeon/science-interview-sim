@@ -248,46 +248,38 @@ def stt_whisper(wav_bytes: bytes) -> str:
         return ""
 
 
-def gpt_feedback(question: str, answer: str) -> str:
-    """답변 자동 피드백(논리/개념/태도/명료성). 클라이언트 없으면 빈 문자열."""
-    if client is None or not answer.strip():
-        return ""
+# 모델 이름은 시크릿에서 바꿀 수 있게 처리 (없으면 gpt-4o-mini)
+OPENAI_MODEL = st.secrets.get("OPENAI_MODEL", "gpt-4o-mini")
+
+def gpt_feedback(question: str, answer: str) -> tuple[str, str]:
+    """(feedback, error) 튜플 반환. error가 빈 문자열이면 성공."""
+    if client is None:
+        return "", "OpenAI 클라이언트 없음(키 미설정)"
+    if not answer.strip():
+        return "", "답변이 비어 있음"
 
     sys_prompt = (
         "너는 과학고 면접관이다. 답변을 4가지 항목(논리, 과학개념, 태도, 명료성)으로 "
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
-
-    # ← 줄 리스트를 join해서 붙여넣기 오류(따옴표/줄바꿈) 방지
-    user_prompt_lines = [
-        "[질문]",
-        question,
-        "",
-        "[답변]",
-        answer,
-        "",
-        "형식:",
-        "- 논리: ?/5",
-        "- 과학개념: ?/5",
-        "- 태도: ?/5",
-        "- 명료성: ?/5",
-        "- 코칭 한 줄: ...",
-        "- 총평: ...",
-    ]
-    user_prompt = "\n".join(user_prompt_lines)
+    user_prompt = "\n".join([
+        "[질문]", question, "", "[답변]", answer, "",
+        "형식:", "- 논리: ?/5", "- 과학개념: ?/5", "- 태도: ?/5",
+        "- 명료성: ?/5", "- 코칭 한 줄: ...", "- 총평: ...",
+    ])
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            model=OPENAI_MODEL,
+            messages=[{"role":"system","content":sys_prompt},
+                      {"role":"user","content":user_prompt}],
             temperature=0.2,
         )
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        return ""
+        out = (resp.choices[0].message.content or "").strip()
+        return (out, "") if out else ("", "모델이 빈 응답을 반환함")
+    except Exception as e:
+        return "", str(e)
+
 
 
 # =============================
@@ -525,24 +517,18 @@ def main():
 
     # --- 제출 / 패스 처리 ---
     if submit:
-        feedback = ""
-        fb_err = ""
         ans_text = (answer or "").strip()
-
-        if client and ans_text:
-            try:
-                feedback = gpt_feedback(q["question"], ans_text)
-            except Exception as e:
-                fb_err = str(e)
-
+        feedback, fb_err = gpt_feedback(q["question"], ans_text)
+    
+        # 화면 상단 ‘직전 피드백’에 즉시 표시 (실패 사유도 그대로 노출)
         st.session_state["last_feedback_q"] = q["question"]
         st.session_state["last_feedback"] = (
-            feedback if feedback
-            else f"⚠️ 자동 피드백 생성 실패 — {fb_err or '답변이 비었거나 API 호출이 거절되었습니다.'}"
+            feedback if feedback else f"⚠️ 자동 피드백 생성 실패 — {fb_err}"
         )
-
+    
+        # 기록 저장(내 코멘트가 우선, 없으면 GPT 피드백 저장)
         save_record(missed=False, fb_text=feedback)
-
+    
         st.success("저장 완료!")
         st.session_state["idx"] = cur_pos + 1
         st.session_state["remaining"] = st.session_state["timer_sec"]
@@ -550,6 +536,7 @@ def main():
         st.session_state["quick_rec"] = False
         if st.session_state["auto_flow"]:
             st.rerun()
+
 
     if pass_q:
         save_record(missed=True, fb_text="")
@@ -569,33 +556,29 @@ def main():
             st.caption("아직 저장된 기록이 없습니다.")
 
     with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
-        colt1, colt2 = st.columns(2)
-        with colt1:
-            ok_key = client is not None
-            st.write("🔑 키 감지:", "✅" if ok_key else "❌")
-        with colt2:
-            if st.button("API 연동 체크", use_container_width=True, key=f"chk_{q_idx}"):
-                if not client:
-                    st.error("OpenAI API 키가 인식되지 않았습니다.")
-                else:
-                    try:
-                        # 가벼운 호출로 연결 체크
-                        _ = client.models.list()
-                        st.success("API 연결 OK")
-                    except Exception as e:
-                        st.error(f"API 오류: {e}")
-    
-        if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{q_idx}"):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write("🔑 키 감지:", "✅" if client else "❌")
+        st.write("🧠 모델:", OPENAI_MODEL)
+    with col2:
+        if st.button("API 연동 체크", use_container_width=True, key=f"chk_{st.session_state.get('idx',0)}"):
             if not client:
-                st.error("OpenAI API 키가 필요합니다.")
-            elif not (answer or "").strip():
-                st.warning("답변이 비었습니다. 내용을 입력해 주세요.")
+                st.error("OpenAI API 키가 인식되지 않았습니다.")
             else:
                 try:
-                    fb = gpt_feedback(q["question"], (answer or '').strip())
-                    st.markdown(fb or "⚠️ 생성 실패")
+                    _ = client.models.list()
+                    st.success("API 연결 OK")
                 except Exception as e:
                     st.error(f"API 오류: {e}")
+
+    if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{st.session_state.get('idx',0)}"):
+        fb, err = gpt_feedback(q["question"], (answer or "").strip())
+        if fb:
+            st.markdown(fb)
+        else:
+            st.error(f"생성 실패: {err}")
+
+
 
 
 if __name__ == "__main__":
