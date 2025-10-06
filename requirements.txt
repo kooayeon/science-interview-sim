@@ -3,4 +3,4 @@ pandas
 openai>=1.30.0
 streamlit-audiorecorder
 gTTS
-pydub==0.25.1
+pydub
