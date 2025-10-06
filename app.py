@@ -1,14 +1,15 @@
 # app.py — 과학고 면접 시뮬레이터 (Streamlit 단일파일)
 # ------------------------------------------------------------
-# 웹 배포용(Community Cloud) 안정화 + 음성/STT/TTS/GPT 피드백 통합 버전
-# - experimental_* API 제거, st.rerun()만 사용
-# - 타이머: 시작/정지/리셋(1초 주기 안전 rerun)
+# 웹 배포용(Community Cloud) 안정화 + 음성/STT/TTS/GPT 피드백 통합 + 자동 TTS/퀵 STT
+# - 질문 화면 진입 시 자동 TTS 재생(autoplay)
+# - "🎙️ 원클릭 녹음→자동 STT" 버튼: 녹음 후 자동으로 Whisper 변환
+# - experimental_* API 제거, st.rerun() 사용
 # - TXT/CSV 질문 업로드, 카테고리 필터/셔플, 자동 다음 이동
-# - 음성 녹음 → Whisper(STT) → 텍스트 채움, gTTS로 질문 음성 출력
-# - GPT 자동 피드백(논리/개념/태도/명료성) 생성(선택)
+# - 타이머: 시작/정지/리셋(1초 주기 안전 rerun)
 # ------------------------------------------------------------
 
 import io
+import base64
 import random
 import time
 from datetime import datetime
@@ -18,7 +19,7 @@ import pandas as pd
 import streamlit as st
 from io import BytesIO
 
-# 음성/AI 관련
+# 음성/AI 관련(선택적 의존성)
 try:
     from openai import OpenAI
 except Exception:  # 패키지 미설치 대비
@@ -39,7 +40,6 @@ except Exception:
 # ------------------------------------------------------------
 OPENAI_API_KEY = None
 try:
-    # st.secrets 미설정 시 KeyError 방지
     OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")  # type: ignore[attr-defined]
 except Exception:
     OPENAI_API_KEY = None
@@ -112,6 +112,8 @@ def init_state():
     st.session_state.setdefault("shuffle", False)
     st.session_state.setdefault("category_filter", "전체")
     st.session_state.setdefault("started_at", None)
+    st.session_state.setdefault("last_tts_qidx", -1)  # 자동 TTS 재생 제어
+    st.session_state.setdefault("quick_rec", False)   # 원클릭 녹음 모드
 
 # -----------------------------
 # 타이머 표시 & 틱
@@ -172,10 +174,39 @@ def to_markdown_bytes(df: pd.DataFrame) -> bytes:
         md_lines.append(row.get("answer", "") or "(미작성)")
         md_lines.append("\n---\n")
     return "\n".join(md_lines).encode("utf-8")
+def to_markdown_bytes(df: pd.DataFrame) -> bytes:
+    md_lines = ["# 과학고 면접 연습 리포트\n"]
+    for i, row in df.iterrows():
+        md_lines.append(f"## Q{i+1}. {row['question']}")
+        md_lines.append(f"- 카테고리: {row['category']}")
+        md_lines.append(f"- 소요시간: {row['duration_sec']}초")
+        md_lines.append(
+            f"- 점수(1~5): 논리 {row['score_logic']}, 개념 {row['score_concept']}, 태도 {row['score_attitude']}, 명료성 {row['score_clarity']}"
+        )
+        md_lines.append(f"- 총평: {row['coach_comment']}")
+        md_lines.append("\n**답변:**\n")
+        md_lines.append(row.get("answer", "") or "(미작성)")
+        md_lines.append("\n---\n")
+    return "\n".join(md_lines).encode("utf-8")
+
 
 # -----------------------------
 # 음성/AI 유틸
 # -----------------------------
+
+def autoplay_audio(audio_bytes: bytes, mime: str = "audio/mp3", hidden: bool = True):
+    """브라우저에서 자동 재생되는 <audio autoplay> 삽입"""
+    if not audio_bytes:
+        return
+    b64 = base64.b64encode(audio_bytes).decode()
+    style = "display:none;" if hidden else ""
+    html = f"""
+    <audio autoplay {'' if not hidden else ''} style='{style}'>
+      <source src="data:{mime};base64,{b64}">
+    </audio>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def tts_question(text: str) -> bytes:
     """질문 텍스트를 mp3 바이트로 변환(gTTS)."""
@@ -196,7 +227,7 @@ def stt_whisper(wav_bytes: bytes) -> str:
         return ""
     try:
         bio = BytesIO(wav_bytes)
-        bio.name = "answer.wav"  # SDK가 확장자 참고
+        bio.name = "answer.wav"
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
             file=bio,
@@ -217,8 +248,19 @@ def gpt_feedback(question: str, answer: str) -> str:
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
 
-    # ← f-string 대신 .format()으로 한 줄에 작성해 줄바꿈 이슈 방지
-    user_prompt = "[질문]\n{}\n\n[답변]\n{}\n\n형식: \n- 논리: ?/5\n- 과학개념: ?/5\n- 태도: ?/5\n- 명료성: ?/5\n- 코칭 한 줄: ...\n- 총평: ...".format(
+    user_prompt = "[질문]
+{}
+
+[답변]
+{}
+
+형식: 
+- 논리: ?/5
+- 과학개념: ?/5
+- 태도: ?/5
+- 명료성: ?/5
+- 코칭 한 줄: ...
+- 총평: ...".format(
         question, answer
     )
 
@@ -288,6 +330,7 @@ def main():
             st.session_state["started_at"] = datetime.now().isoformat()
             st.session_state["remaining"] = st.session_state["timer_sec"]
             st.session_state["timer_running"] = False
+            st.session_state["last_tts_qidx"] = -1
             st.success("세션이 초기화되었습니다. 화이팅!")
 
         if st.session_state.get("records"):
@@ -319,13 +362,25 @@ def main():
     with header_left:
         st.subheader(f"Q{cur_pos + 1} / {len(order)}  ·  [{q['category']}]  {q['question']}")
     with header_right:
-        # 질문 듣기 (TTS)
-        if st.button("🔊 질문 듣기", use_container_width=True):
+        # 질문 듣기 (TTS) + 자동 재생 제어
+        play_now = False
+        if st.session_state.get("last_tts_qidx", -1) != q_idx:
+            play_now = True
+            st.session_state["last_tts_qidx"] = q_idx
+        col_tts1, col_tts2 = st.columns(2)
+        with col_tts1:
+            if st.button("🔊 질문 듣기", use_container_width=True):
+                play_now = True
+        with col_tts2:
+            if audiorecorder is not None and st.button("🎙️ 원클릭 녹음→자동 STT", use_container_width=True):
+                st.session_state["quick_rec"] = True
+                st.rerun()
+
+        if play_now:
             mp3 = tts_question(q["question"])
             if mp3:
-                st.audio(mp3, format="audio/mp3")
-            else:
-                st.warning("TTS를 생성할 수 없습니다. (일시적 오류 또는 gTTS 미설치)")
+                autoplay_audio(mp3, mime="audio/mp3", hidden=True)
+
         st.button(
             "다음으로 건너뛰기",
             on_click=lambda: st.session_state.update({
@@ -351,7 +406,30 @@ def main():
     st.info("타이머가 0이 되어도 답변 작성은 가능합니다. 긴장감 조절용이에요.")
     timer_block()
 
-    # 음성 녹음 → STT 변환
+    # 빠른 녹음 모드(버튼 한 번 → Stop 누르면 자동 STT)
+    if st.session_state.get("quick_rec", False) and audiorecorder is not None:
+        with st.container(border=True):
+            st.markdown("**🎙️ 빠른 녹음 모드** — Stop을 누르면 자동으로 STT가 실행돼요.")
+            quick_audio = audiorecorder("Start recording", "Stop recording")
+            if quick_audio is not None and len(quick_audio) > 0:
+                wav_io = BytesIO()
+                quick_audio.export(wav_io, format="wav")
+                wav_bytes = wav_io.getvalue()
+                st.audio(wav_bytes, format="audio/wav")
+                if client is None:
+                    st.warning("OpenAI API 키가 없어 STT를 실행할 수 없습니다.")
+                else:
+                    text = stt_whisper(wav_bytes)
+                    if text:
+                        st.session_state[f"ans_{q_idx}"] = text
+                        st.success("자막 변환 완료! 아래 답변 칸에 채워졌어요.")
+                    else:
+                        st.warning("자막 변환에 실패했어요. 다시 시도해 주세요.")
+                # 한 번 실행 후 종료
+                st.session_state["quick_rec"] = False
+                st.rerun()
+
+    # 음성 녹음 → STT 변환 (일반 모드)
     if audiorecorder is not None:
         with st.expander("🎙️ 음성으로 답변하기 / 자동 자막(STT)"):
             st.caption("Start → 말하기 → Stop 을 누르면 자막이 자동 채워집니다.")
@@ -426,6 +504,7 @@ def main():
         st.session_state["idx"] = cur_pos + 1
         st.session_state["remaining"] = st.session_state["timer_sec"]
         st.session_state["timer_running"] = False
+        st.session_state["quick_rec"] = False
         if st.session_state["auto_flow"]:
             st.rerun()
 
@@ -435,6 +514,7 @@ def main():
         st.session_state["idx"] = cur_pos + 1
         st.session_state["remaining"] = st.session_state["timer_sec"]
         st.session_state["timer_running"] = False
+        st.session_state["quick_rec"] = False
         if st.session_state["auto_flow"]:
             st.rerun()
 
