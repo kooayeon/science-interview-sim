@@ -523,7 +523,8 @@ def main():
         }
         st.session_state["records"].append(record)
         
-    if submit:
+# --- 제출 / 패스 처리 ---
+if submit:
     feedback = ""
     fb_err = ""
     ans_text = (answer or "").strip()
@@ -534,7 +535,7 @@ def main():
         except Exception as e:
             fb_err = str(e)
 
-    # 화면 상단 '직전 피드백' 박스에 바로 띄우기 (성공/실패 모두 메시지 표시)
+    # 화면 상단 '직전 피드백' 영역에 바로 표시
     st.session_state["last_feedback_q"] = q["question"]
     st.session_state["last_feedback"] = (
         feedback if feedback
@@ -552,7 +553,24 @@ def main():
     if st.session_state["auto_flow"]:
         st.rerun()
 
-    with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
+if pass_q:
+    save_record(missed=True, fb_text="")
+    st.warning("패스로 기록했습니다.")
+    st.session_state["idx"] = cur_pos + 1
+    st.session_state["remaining"] = st.session_state["timer_sec"]
+    st.session_state["timer_running"] = False
+    st.session_state["quick_rec"] = False
+    if st.session_state["auto_flow"]:
+        st.rerun()
+        
+    with st.expander("진행 현황 / 기록 보기"):
+        if st.session_state.get("records"):
+            df = pd.DataFrame(st.session_state["records"])  # type: ignore
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.caption("아직 저장된 기록이 없습니다.")
+
+with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
     colt1, colt2 = st.columns(2)
     with colt1:
         ok_key = client is not None
@@ -580,24 +598,6 @@ def main():
                 st.markdown(fb or "⚠️ 생성 실패")
             except Exception as e:
                 st.error(f"API 오류: {e}")
-
-
-    if pass_q:
-        save_record(missed=True, fb_text="")
-        st.warning("패스로 기록했습니다.")
-        st.session_state["idx"] = cur_pos + 1
-        st.session_state["remaining"] = st.session_state["timer_sec"]
-        st.session_state["timer_running"] = False
-        st.session_state["quick_rec"] = False
-        if st.session_state["auto_flow"]:
-            st.rerun()
-
-    with st.expander("진행 현황 / 기록 보기"):
-        if st.session_state.get("records"):
-            df = pd.DataFrame(st.session_state["records"])  # type: ignore
-            st.dataframe(df, use_container_width=True)
-        else:
-            st.caption("아직 저장된 기록이 없습니다.")
 
 
 if __name__ == "__main__":
