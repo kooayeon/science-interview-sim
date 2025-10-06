@@ -497,7 +497,7 @@ def main():
         score_clarity = col4.slider("명료성", 1, 5, 3)
         coach_comment = st.text_area("총평/피드백", height=100, placeholder="핵심 강점과 다음에 보완할 1가지를 적어주세요.")
 
-    # 제출/패스/타이머
+        # 제출/패스/타이머 버튼
     btn_cols = st.columns([1, 1, 1])
     submit = btn_cols[0].button("제출 및 저장", type="primary")
     reset_timer_btn = btn_cols[1].button("타이머 리셋")
@@ -522,46 +522,44 @@ def main():
             "coach_comment": (coach_comment.strip() or fb_text),
         }
         st.session_state["records"].append(record)
-        
-# --- 제출 / 패스 처리 ---
-if submit:
-    feedback = ""
-    fb_err = ""
-    ans_text = (answer or "").strip()
 
-    if client and ans_text:
-        try:
-            feedback = gpt_feedback(q["question"], ans_text)
-        except Exception as e:
-            fb_err = str(e)
+    # --- 제출 / 패스 처리 ---
+    if submit:
+        feedback = ""
+        fb_err = ""
+        ans_text = (answer or "").strip()
 
-    # 화면 상단 '직전 피드백' 영역에 바로 표시
-    st.session_state["last_feedback_q"] = q["question"]
-    st.session_state["last_feedback"] = (
-        feedback if feedback
-        else f"⚠️ 자동 피드백 생성 실패 — {fb_err or '답변이 비었거나 API 호출이 거절되었습니다.'}"
-    )
+        if client and ans_text:
+            try:
+                feedback = gpt_feedback(q["question"], ans_text)
+            except Exception as e:
+                fb_err = str(e)
 
-    # 기록 저장(직접 코멘트가 있으면 우선, 없으면 GPT 피드백 저장)
-    save_record(missed=False, fb_text=feedback)
+        st.session_state["last_feedback_q"] = q["question"]
+        st.session_state["last_feedback"] = (
+            feedback if feedback
+            else f"⚠️ 자동 피드백 생성 실패 — {fb_err or '답변이 비었거나 API 호출이 거절되었습니다.'}"
+        )
 
-    st.success("저장 완료!")
-    st.session_state["idx"] = cur_pos + 1
-    st.session_state["remaining"] = st.session_state["timer_sec"]
-    st.session_state["timer_running"] = False
-    st.session_state["quick_rec"] = False
-    if st.session_state["auto_flow"]:
-        st.rerun()
+        save_record(missed=False, fb_text=feedback)
 
-if pass_q:
-    save_record(missed=True, fb_text="")
-    st.warning("패스로 기록했습니다.")
-    st.session_state["idx"] = cur_pos + 1
-    st.session_state["remaining"] = st.session_state["timer_sec"]
-    st.session_state["timer_running"] = False
-    st.session_state["quick_rec"] = False
-    if st.session_state["auto_flow"]:
-        st.rerun()
+        st.success("저장 완료!")
+        st.session_state["idx"] = cur_pos + 1
+        st.session_state["remaining"] = st.session_state["timer_sec"]
+        st.session_state["timer_running"] = False
+        st.session_state["quick_rec"] = False
+        if st.session_state["auto_flow"]:
+            st.rerun()
+
+    if pass_q:
+        save_record(missed=True, fb_text="")
+        st.warning("패스로 기록했습니다.")
+        st.session_state["idx"] = cur_pos + 1
+        st.session_state["remaining"] = st.session_state["timer_sec"]
+        st.session_state["timer_running"] = False
+        st.session_state["quick_rec"] = False
+        if st.session_state["auto_flow"]:
+            st.rerun()
         
     with st.expander("진행 현황 / 기록 보기"):
         if st.session_state.get("records"):
