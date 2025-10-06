@@ -568,34 +568,34 @@ def main():
         else:
             st.caption("아직 저장된 기록이 없습니다.")
 
-with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
-    colt1, colt2 = st.columns(2)
-    with colt1:
-        ok_key = client is not None
-        st.write("🔑 키 감지:", "✅" if ok_key else "❌")
-    with colt2:
-        if st.button("API 연동 체크", use_container_width=True, key=f"chk_{q_idx}"):
+    with st.expander("🔧 피드백 테스트/진단 (제출 없이 실행)"):
+        colt1, colt2 = st.columns(2)
+        with colt1:
+            ok_key = client is not None
+            st.write("🔑 키 감지:", "✅" if ok_key else "❌")
+        with colt2:
+            if st.button("API 연동 체크", use_container_width=True, key=f"chk_{q_idx}"):
+                if not client:
+                    st.error("OpenAI API 키가 인식되지 않았습니다.")
+                else:
+                    try:
+                        # 가벼운 호출로 연결 체크
+                        _ = client.models.list()
+                        st.success("API 연결 OK")
+                    except Exception as e:
+                        st.error(f"API 오류: {e}")
+    
+        if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{q_idx}"):
             if not client:
-                st.error("OpenAI API 키가 인식되지 않았습니다.")
+                st.error("OpenAI API 키가 필요합니다.")
+            elif not (answer or "").strip():
+                st.warning("답변이 비었습니다. 내용을 입력해 주세요.")
             else:
                 try:
-                    # 가벼운 호출로 연결 체크
-                    _ = client.models.list()
-                    st.success("API 연결 OK")
+                    fb = gpt_feedback(q["question"], (answer or '').strip())
+                    st.markdown(fb or "⚠️ 생성 실패")
                 except Exception as e:
                     st.error(f"API 오류: {e}")
-
-    if st.button("💬 이 답변으로 피드백 생성", use_container_width=True, key=f"fbtest_{q_idx}"):
-        if not client:
-            st.error("OpenAI API 키가 필요합니다.")
-        elif not (answer or "").strip():
-            st.warning("답변이 비었습니다. 내용을 입력해 주세요.")
-        else:
-            try:
-                fb = gpt_feedback(q["question"], (answer or '').strip())
-                st.markdown(fb or "⚠️ 생성 실패")
-            except Exception as e:
-                st.error(f"API 오류: {e}")
 
 
 if __name__ == "__main__":
