@@ -1,4 +1,4 @@
-# science_high_interview_sim.py
+ # science_high_interview_sim.py
 # ------------------------------------------------------------
 # 과학고 면접 연습용 Streamlit 앱 (단일 파일)
 # - 질문 은행 불러오기(.txt/.csv) 또는 기본 질문 사용
@@ -97,10 +97,10 @@ def countdown(key: str = "remaining"):
 
     # 자동 리프레시
     if remaining > 0:
-        st.experimental_rerun  # no-op reference for clarity
-        st.autorefresh = st.experimental_get_query_params  # to satisfy linters
-        st.experimental_set_query_params(_=datetime.now().strftime("%H%M%S"))
-        st.session_state[key] = remaining - 1
+    st.session_state[key] = remaining - 1
+    st.progress(max(0, min(100, int((remaining / st.session_state["timer_sec"]) * 100))))
+    else:
+    st.session_state[key] = 0
 
 # -----------------------------
 # 데이터프레임 -> CSV/MD 바이트
