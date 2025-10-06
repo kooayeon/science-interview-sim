@@ -9,11 +9,9 @@ import streamlit as st
 import pandas as pd
 from gtts import gTTS
 from pydub import AudioSegment
-import pydub
-
-# ffmpeg 위치 지정 (Cloud 환경 대비)
-AudioSegment.converter = "/usr/bin/ffmpeg"
-AudioSegment.ffprobe = "/usr/bin/ffprobe"
+from pydub.utils import which
+AudioSegment.converter = which("ffmpeg")
+AudioSegment.ffprobe = which("ffprobe")
 
 from streamlit_audiorecorder import audiorecorder
 
