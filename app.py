@@ -1,16 +1,12 @@
 # app.py — 과학고 면접 시뮬레이터 (Streamlit 단일파일)
 # ------------------------------------------------------------
-# 웹 배포용(Community Cloud) 안정화 버전
+# 웹 배포용(Community Cloud) 안정화 + 음성/STT/TTS/GPT 피드백 통합 버전
 # - experimental_* API 제거, st.rerun()만 사용
-# - 타이머: 시작/정지/리셋 지원 (1초 주기로 안전한 rerun)
+# - 타이머: 시작/정지/리셋(1초 주기 안전 rerun)
 # - TXT/CSV 질문 업로드, 카테고리 필터/셔플, 자동 다음 이동
-# - 루브릭 평가 & 리포트(CSV/Markdown) 다운로드
+# - 음성 녹음 → Whisper(STT) → 텍스트 채움, gTTS로 질문 음성 출력
+# - GPT 자동 피드백(논리/개념/태도/명료성) 생성(선택)
 # ------------------------------------------------------------
-from openai import OpenAI
-from gtts import gTTS
-from io import BytesIO
-from audiorecorder import audiorecorder
-from pydub import AudioSegment
 
 import io
 import random
@@ -20,8 +16,40 @@ from typing import List, Dict
 
 import pandas as pd
 import streamlit as st
+from io import BytesIO
 
-client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+# 음성/AI 관련
+try:
+    from openai import OpenAI
+except Exception:  # 패키지 미설치 대비
+    OpenAI = None  # type: ignore
+
+try:
+    from gtts import gTTS
+except Exception:  # 패키지 미설치 대비
+    gTTS = None  # type: ignore
+
+try:
+    from audiorecorder import audiorecorder
+except Exception:
+    audiorecorder = None  # type: ignore
+
+# ------------------------------------------------------------
+# OpenAI 클라이언트 (Secrets에 OPENAI_API_KEY 저장 필요)
+# ------------------------------------------------------------
+OPENAI_API_KEY = None
+try:
+    # st.secrets 미설정 시 KeyError 방지
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")  # type: ignore[attr-defined]
+except Exception:
+    OPENAI_API_KEY = None
+
+client = None
+if OpenAI is not None and OPENAI_API_KEY:
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception:
+        client = None
 
 # -----------------------------
 # 기본 질문 세트
@@ -36,48 +64,6 @@ DEFAULT_QUESTIONS = [
     {"category": "수학", "question": "함수의 기울기의 의미를 그래프와 함께 말로 설명해 보세요."},
     {"category": "수학", "question": "수열에서 규칙성을 발견하는 본인만의 접근 과정을 설명해 보세요."},
 ]
-
-def tts_question(text: str) -> bytes:
-    """질문 텍스트를 mp3 바이트로 변환(gTTS)."""
-    if not text.strip():
-        return b""
-    mp3_bytes = BytesIO()
-    gTTS(text=text, lang="ko").write_to_fp(mp3_bytes)
-    mp3_bytes.seek(0)
-    return mp3_bytes.read()
-
-def stt_whisper(wav_bytes: bytes) -> str:
-    """녹음된 음성(wav) -> Whisper API 자막 텍스트"""
-    if not wav_bytes:
-        return ""
-    with BytesIO(wav_bytes) as bio:
-        bio.name = "answer.wav"  # SDK가 확장자 참고
-        transcript = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=bio,
-            language="ko"
-        )
-    return getattr(transcript, "text", "").strip()
-
-def gpt_feedback(question: str, answer: str) -> str:
-    """답변에 대한 간단 피드백(논리/개념/태도/명료성 4항목)"""
-    if not answer.strip():
-        return "답변이 비어 있어요. 한 번 말해보거나 적어보세요!"
-    sys = (
-        "너는 과학고 면접관이다. 답변을 4가지 항목(논리, 과학개념, 태도, 명료성)으로 "
-        "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
-    )
-    user = (
-        f"[질문]\n{question}\n\n"
-        f"[답변]\n{answer}\n\n"
-        "형식: \n- 논리: ?/5\n- 과학개념: ?/5\n- 태도: ?/5\n- 명료성: ?/5\n- 코칭 한 줄: ...\n- 총평: ..."
-    )
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"system","content":sys},{"role":"user","content":user}],
-        temperature=0.2
-    )
-    return resp.choices[0].message.content.strip()
 
 # -----------------------------
 # 파일 파싱 (.txt / .csv)
@@ -132,7 +118,6 @@ def init_state():
 # -----------------------------
 
 def timer_block():
-    # 진행바와 남은 시간 지표
     total = max(1, int(st.session_state.get("timer_sec", 60)))
     remaining = int(st.session_state.get("remaining", total))
 
@@ -166,7 +151,7 @@ def timer_block():
             st.session_state["timer_running"] = False
 
 # -----------------------------
-# 내보내기
+# 리포트 내보내기
 # -----------------------------
 
 def to_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -184,10 +169,78 @@ def to_markdown_bytes(df: pd.DataFrame) -> bytes:
         )
         md_lines.append(f"- 총평: {row['coach_comment']}")
         md_lines.append("\n**답변:**\n")
-        md_lines.append(row["answer"] or "(미작성)")
+        md_lines.append(row.get("answer", "") or "(미작성)")
         md_lines.append("\n---\n")
     return "\n".join(md_lines).encode("utf-8")
 
+# -----------------------------
+# 음성/AI 유틸
+# -----------------------------
+
+def tts_question(text: str) -> bytes:
+    """질문 텍스트를 mp3 바이트로 변환(gTTS)."""
+    if not text or gTTS is None:
+        return b""
+    try:
+        mp3_bytes = BytesIO()
+        gTTS(text=text, lang="ko").write_to_fp(mp3_bytes)
+        mp3_bytes.seek(0)
+        return mp3_bytes.read()
+    except Exception:
+        return b""
+
+
+def stt_whisper(wav_bytes: bytes) -> str:
+    """녹음된 음성(wav) -> Whisper API 자막 텍스트"""
+    if not wav_bytes or client is None:
+        return ""
+    try:
+        bio = BytesIO(wav_bytes)
+        bio.name = "answer.wav"  # SDK가 확장자 참고
+        transcript = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=bio,
+            language="ko",
+        )
+        return getattr(transcript, "text", "").strip()
+    except Exception:
+        return ""
+
+
+def gpt_feedback(question: str, answer: str) -> str:
+    """답변 자동 피드백(논리/개념/태도/명료성). 클라이언트 없으면 빈 문자열."""
+    if client is None or not answer.strip():
+        return ""
+    sys = (
+        "너는 과학고 면접관이다. 답변을 4가지 항목(논리, 과학개념, 태도, 명료성)으로 "
+        "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
+    )
+    user = (
+        f"[질문]
+{question}
+
+"
+        f"[답변]
+{answer}
+
+"
+        "형식: 
+- 논리: ?/5
+- 과학개념: ?/5
+- 태도: ?/5
+- 명료성: ?/5
+- 코칭 한 줄: ...
+- 총평: ..."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return ""
 
 # -----------------------------
 # 메인 앱
@@ -200,7 +253,13 @@ def main():
     # 사이드바
     with st.sidebar:
         st.title("🧪 과학고 면접 시뮬레이터")
-        st.caption("텍스트 기반 1문항 진행형 / 평가 및 리포트 지원")
+        st.caption("텍스트/음성 기반 1문항 진행형 · 평가 및 리포트")
+
+        # API 키 상태 안내
+        if client is None:
+            st.warning("OpenAI API 키가 없어 STT/자동피드백은 비활성화됩니다. (Settings → Secrets에 OPENAI_API_KEY 등록)")
+        else:
+            st.success("OpenAI API 키 인식됨: STT/자동피드백 사용 가능!")
 
         up = st.file_uploader("질문지 업로드 (.txt 또는 .csv)", type=["txt", "csv"])
         if up:
@@ -219,7 +278,6 @@ def main():
         st.session_state["category_filter"] = st.selectbox("카테고리 필터", cats, index=0)
 
         st.session_state["timer_sec"] = st.slider("답변 시간(초)", 15, 180, st.session_state["timer_sec"])  # 15~180초
-        # timer_sec이 바뀌면 remaining도 동기화(달리는 중이 아닐 때)
         if not st.session_state.get("timer_running", False):
             st.session_state["remaining"] = st.session_state["timer_sec"]
 
@@ -264,17 +322,25 @@ def main():
     q_idx = order[cur_pos]
     q = st.session_state["questions"][q_idx]
 
-    header_left, header_right = st.columns([6, 1])
+    header_left, header_right = st.columns([6, 2])
     with header_left:
         st.subheader(f"Q{cur_pos + 1} / {len(order)}  ·  [{q['category']}]  {q['question']}")
     with header_right:
+        # 질문 듣기 (TTS)
+        if st.button("🔊 질문 듣기", use_container_width=True):
+            mp3 = tts_question(q["question"])
+            if mp3:
+                st.audio(mp3, format="audio/mp3")
+            else:
+                st.warning("TTS를 생성할 수 없습니다. (일시적 오류 또는 gTTS 미설치)")
         st.button(
             "다음으로 건너뛰기",
             on_click=lambda: st.session_state.update({
                 "idx": cur_pos + 1,
                 "remaining": st.session_state["timer_sec"],
                 "timer_running": False,
-            })
+            }),
+            use_container_width=True,
         )
 
     with st.expander("답변 구조 템플릿 보기"):
@@ -291,39 +357,39 @@ def main():
 
     st.info("타이머가 0이 되어도 답변 작성은 가능합니다. 긴장감 조절용이에요.")
     timer_block()
-    
+
+    # 음성 녹음 → STT 변환
+    if audiorecorder is not None:
+        with st.expander("🎙️ 음성으로 답변하기 / 자동 자막(STT)"):
+            st.caption("Start → 말하기 → Stop 을 누르면 자막이 자동 채워집니다.")
+            audio = audiorecorder("Start recording", "Stop recording")
+
+            if audio is not None and len(audio) > 0:
+                wav_bytes_io = BytesIO()
+                audio.export(wav_bytes_io, format="wav")
+                wav_bytes = wav_bytes_io.getvalue()
+
+                col_a1, col_a2 = st.columns(2)
+                with col_a1:
+                    st.audio(wav_bytes, format="audio/wav")
+                with col_a2:
+                    if st.button("자막 변환(STT)", use_container_width=True, disabled=(client is None)):
+                        if client is None:
+                            st.warning("OpenAI API 키가 없어 STT를 실행할 수 없습니다.")
+                        else:
+                            text = stt_whisper(wav_bytes)
+                            if text:
+                                st.session_state[f"ans_{q_idx}"] = text
+                                st.success("자막 변환 완료! 아래 답변 창에 채워졌어요.")
+                            else:
+                                st.warning("자막 변환에 실패했어요. 다시 시도해 주세요.")
+    else:
+        st.caption("(옵션) 음성 녹음을 쓰려면 requirements.txt에 streamlit-audiorecorder, pydub을 추가하세요.")
+
+    # 텍스트 답변 입력
     answer = st.text_area("답변 입력", key=f"ans_{q_idx}", height=180, placeholder="구조를 따라 차분히 서술해 보세요…")
-    
-    with st.expander("🎙️ 음성으로 답변하기 / 자동 자막(STT)"):
-    st.caption("Start → 말하기 → Stop 을 누르면 자막이 자동 채워집니다.")
-    audio = audiorecorder("Start recording", "Stop recording")
 
-    if len(audio) > 0:
-        # audiorecorder는 pydub AudioSegment를 반환
-        wav_bytes_io = BytesIO()
-        audio.export(wav_bytes_io, format="wav")
-        wav_bytes = wav_bytes_io.getvalue()
-
-        col_a1, col_a2 = st.columns(2)
-        with col_a1:
-            st.audio(wav_bytes, format="audio/wav")
-        with col_a2:
-            if st.button("자막 변환(STT)", use_container_width=True):
-                text = stt_whisper(wav_bytes)
-                if text:
-                    # 텍스트 답변창에 자동 채우기
-                    st.session_state[f"ans_{q_idx}"] = text
-                    st.success("자막 변환 완료! 아래 답변 창에 채워졌어요.")
-                else:
-                    st.warning("자막 변환에 실패했어요. 다시 시도해 주세요.")
-                    
-    tts_col1, tts_col2 = st.columns([1,6])
-with tts_col1:
-    if st.button("🔊 질문 듣기", use_container_width=True):
-        mp3 = tts_question(q["question"])
-        if mp3:
-            st.audio(mp3, format="audio/mp3")
-
+    # 평가 루브릭
     with st.expander("자기/코치 평가 (선택)"):
         col1, col2, col3, col4 = st.columns(4)
         score_logic = col1.slider("논리", 1, 5, 3)
@@ -343,17 +409,21 @@ with tts_col1:
         st.toast("타이머를 리셋했습니다.")
 
     def save_record(missed: bool = False):
+        # 자동 코멘트 (키 없으면 공백)
+        auto_comment = gpt_feedback(q["question"], (answer or "").strip())
+        final_comment = (coach_comment.strip() if coach_comment and coach_comment.strip() else auto_comment)
+
         record = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "category": q["category"],
             "question": q["question"],
-            "answer": "" if missed else (answer.strip() if answer else ""),
+            "answer": "" if missed else ((answer or "").strip()),
             "duration_sec": int(st.session_state["timer_sec"] - st.session_state.get("remaining", 0)),
             "score_logic": score_logic,
             "score_concept": score_concept,
             "score_attitude": score_attitude,
             "score_clarity": score_clarity,
-            "coach_comment": coach_comment.strip(),
+            "coach_comment": final_comment,
         }
         st.session_state["records"].append(record)
 
