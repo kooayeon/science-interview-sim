@@ -35,6 +35,18 @@ try:
 except Exception:
     audiorecorder = None  # type: ignore
 
+# === Recorder fallback import ===
+REC_MODE = None
+try:
+    from audiorecorder import audiorecorder
+    REC_MODE = "audiorecorder"  # 기본
+except Exception:
+    try:
+        from streamlit_audio_recorder import st_audiorec
+        REC_MODE = "st_audiorec"  # 대체
+    except Exception:
+        REC_MODE = None  # 둘 다 실패하면 녹음 UI 숨김
+
 # ------------------------------------------------------------
 # OpenAI 클라이언트 (Secrets에 OPENAI_API_KEY 저장 필요)
 # ------------------------------------------------------------
@@ -193,19 +205,39 @@ def to_markdown_bytes(df: pd.DataFrame) -> bytes:
 # -----------------------------
 # 음성/AI 유틸
 # -----------------------------
+from io import BytesIO
+import base64
+import wave
+
+def audiosegment_to_wav_bytes(seg) -> bytes:
+    """pydub.AudioSegment -> WAV bytes (ffmpeg 불필요)"""
+    if seg is None:
+        return b""
+    buf = BytesIO()
+    with wave.open(buf, "wb") as wf:
+        # audiorecorder가 반환하는 AudioSegment를 안전하게 처리
+        channels = int(getattr(seg, "channels", 1))
+        sample_width = int(getattr(seg, "sample_width", 2))  # 16-bit
+        frame_rate = int(getattr(seg, "frame_rate", 16000))
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(frame_rate)
+        wf.writeframes(seg.raw_data)
+    buf.seek(0)
+    return buf.read()
 
 def autoplay_audio(audio_bytes: bytes, mime: str = "audio/mp3", hidden: bool = True):
-    """브라우저에서 자동 재생되는 <audio autoplay> 삽입"""
+    """브라우저에서 자동 재생되는 <audio autoplay> 삽입 (삼중따옴표/ f-string 없이 안전 버전)"""
     if not audio_bytes:
         return
     b64 = base64.b64encode(audio_bytes).decode()
     style = "display:none;" if hidden else ""
-    html = f"""
-    <audio autoplay {'' if not hidden else ''} style='{style}'>
-      <source src="data:{mime};base64,{b64}">
-    </audio>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+    html_lines = [
+        '<audio autoplay style="{}">'.format(style),
+        '  <source src="data:{};base64,{}">'.format(mime, b64),
+        "</audio>",
+    ]
+    st.markdown("\n".join(html_lines), unsafe_allow_html=True)
 
 
 def tts_question(text: str) -> bytes:
@@ -219,7 +251,6 @@ def tts_question(text: str) -> bytes:
         return mp3_bytes.read()
     except Exception:
         return b""
-
 
 def stt_whisper(wav_bytes: bytes) -> str:
     """녹음된 음성(wav) -> Whisper API 자막 텍스트"""
@@ -237,7 +268,6 @@ def stt_whisper(wav_bytes: bytes) -> str:
     except Exception:
         return ""
 
-
 def gpt_feedback(question: str, answer: str) -> str:
     """답변 자동 피드백(논리/개념/태도/명료성). 클라이언트 없으면 빈 문자열."""
     if client is None or not answer.strip():
@@ -248,10 +278,23 @@ def gpt_feedback(question: str, answer: str) -> str:
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
 
-    # ← f-string 대신 .format()으로 한 줄에 작성해 줄바꿈 이슈 방지
-    user_prompt = "[질문]\n{}\n\n[답변]\n{}\n\n형식: \n- 논리: ?/5\n- 과학개념: ?/5\n- 태도: ?/5\n- 명료성: ?/5\n- 코칭 한 줄: ...\n- 총평: ...".format(
-        question, answer
-    )
+    # 줄 리스트를 join하여 붙여넣기 오류(따옴표/줄바꿈) 방지
+    user_prompt_lines = [
+        "[질문]",
+        question,
+        "",
+        "[답변]",
+        answer,
+        "",
+        "형식:",
+        "- 논리: ?/5",
+        "- 과학개념: ?/5",
+        "- 태도: ?/5",
+        "- 명료성: ?/5",
+        "- 코칭 한 줄: ...",
+        "- 총평: ...",
+    ]
+    user_prompt = "\n".join(user_prompt_lines)
 
     try:
         resp = client.chat.completions.create(
@@ -265,6 +308,7 @@ def gpt_feedback(question: str, answer: str) -> str:
         return resp.choices[0].message.content.strip()
     except Exception:
         return ""
+
 
 
 # -----------------------------
