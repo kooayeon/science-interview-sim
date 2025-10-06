@@ -248,19 +248,8 @@ def gpt_feedback(question: str, answer: str) -> str:
         "각 1~5점과 한 줄 코칭으로 간단히 평가하라. 총 평점도 1줄로."
     )
 
-    user_prompt = "[질문]
-{}
-
-[답변]
-{}
-
-형식: 
-- 논리: ?/5
-- 과학개념: ?/5
-- 태도: ?/5
-- 명료성: ?/5
-- 코칭 한 줄: ...
-- 총평: ...".format(
+    # ← f-string 대신 .format()으로 한 줄에 작성해 줄바꿈 이슈 방지
+    user_prompt = "[질문]\n{}\n\n[답변]\n{}\n\n형식: \n- 논리: ?/5\n- 과학개념: ?/5\n- 태도: ?/5\n- 명료성: ?/5\n- 코칭 한 줄: ...\n- 총평: ...".format(
         question, answer
     )
 
@@ -276,6 +265,7 @@ def gpt_feedback(question: str, answer: str) -> str:
         return resp.choices[0].message.content.strip()
     except Exception:
         return ""
+
 
 # -----------------------------
 # 메인 앱
